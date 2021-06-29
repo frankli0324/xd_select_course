@@ -1,0 +1,22 @@
+{
+  "courses": {
+    "example": {
+      "课程号": [
+        "班级号，留空则默认选择可选班级列表中的第一项"
+      ]
+    },
+    "public": {  // 公选
+      "IC206037": [],
+      "CS206005": []
+    },
+    "program": {},  // 必修
+    "gym": {}  // 体育
+  },
+  "open_types": [
+    "public"  // 填写需要选课的类别，比如双创周选课只选public类型（公选课）
+  ],
+  "authentication": {
+    "username": "",
+    "password": ""
+  }
+}
