@@ -16,47 +16,12 @@ TYPES = {
     'public': 'XGXK',  # 校公选课
     'program': 'FANKC',  # 方案内课程
     'gym': 'TYKC',  # 体育课程
+    'recommended': 'TJKC'
 }
 info = {}
 status = {}
 course_list = set()
 target_course_available = {}
-
-if __name__ == "__main__":
-    ses = XKSession(auth['username'], auth['password'])
-    ses.request = rate_limited(ses.request)
-    print('token为' + ses.token)
-    get_info()
-
-    if input('是否开始抢课?(y/n)') == 'n':
-        print('行吧')
-        exit(0)
-    get_class_thread = GetClasses({TYPES[i] for i in config["open_types"]})
-    get_class_thread.start()
-    with output(output_type="dict") as progress:
-        for k, v in config['courses'].items():
-            if k not in TYPES:
-                continue
-            for course_id, classes in v.items():
-                course_list.add(course_id)
-                if classes:
-                    for c in classes:
-                        name = f'{course_id}[{c}]'
-                        progress[name] = Job(TYPES[k], course_id, c)
-                        progress[name].start()
-                else:
-                    progress[course_id] = Job(TYPES[k], course_id)
-                    progress[course_id].start()
-        try:
-            while True:
-                for k in progress:
-                    progress[k] = progress[k]  # 刷新输出
-                time.sleep(0.1)
-        except KeyboardInterrupt:
-            for i in progress.values():
-                if i.is_alive():
-                    i.terminate()
-            get_class_thread.terminate()
 
 
 def get_info():
@@ -211,13 +176,13 @@ class GetClasses(KThread):
             "campus": info['campus'],
             "electiveBatchCode": info['elective_batch_code'],
             "isMajor": "1",
-            "teachingClassType": _type,
+            "teachingClassType": TYPES[_type],
             "checkConflict": "2",
             "checkCapacity": "2",
             "queryContent": ""
         }, "pageSize": "500", "pageNumber": "0", "order": "null"})
         query_resp = ses.post(
-            f'{BASE_URL}/elective/{"program" if _type == "FANKC" else "public"}Course.do',
+            f'{BASE_URL}/elective/{_type}Course.do',
             data={'querySetting': query_setting}
         ).json()
         if query_resp['code'] != '1':
@@ -225,7 +190,7 @@ class GetClasses(KThread):
         while query_resp['code'] != '1':
             print('.', end='', flush=True)
             query_resp = ses.post(
-                f'{BASE_URL}/elective/{"program" if _type == "FANKC" else "public"}Course.do',
+                f'{BASE_URL}/elective/{_type}Course.do',
                 data={'querySetting': query_setting}
             ).json()
         for course in query_resp['dataList']:
@@ -247,3 +212,40 @@ class GetClasses(KThread):
         while True:
             for _type in self.types:
                 self.get_classes(_type)
+
+
+if __name__ == '__main__':
+    ses = XKSession(auth['username'], auth['password'])
+    ses.request = rate_limited(ses.request)
+    print('token为' + ses.token)
+    get_info()
+
+    if input('是否开始抢课?(y/n)') == 'n':
+        print('行吧')
+        exit(0)
+    get_class_thread = GetClasses(config["open_types"])
+    get_class_thread.start()
+    with output(output_type="dict") as progress:
+        for k, v in config['courses'].items():
+            if k not in TYPES:
+                continue
+            for course_id, classes in v.items():
+                course_list.add(course_id)
+                if classes:
+                    for c in classes:
+                        name = f'{course_id}[{c}]'
+                        progress[name] = Job(TYPES[k], course_id, c)
+                        progress[name].start()
+                else:
+                    progress[course_id] = Job(TYPES[k], course_id)
+                    progress[course_id].start()
+        try:
+            while True:
+                for k in progress:
+                    progress[k] = progress[k]  # 刷新输出
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            for i in progress.values():
+                if i.is_alive():
+                    i.terminate()
+            get_class_thread.terminate()
