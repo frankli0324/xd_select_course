@@ -6,37 +6,23 @@ import ctypes
 
 from libxduauth import XKSession
 from reprint import output
+from requests.exceptions import RequestException
 
 with open('config.json', 'r') as f:
     config = json.load(f)
     auth = config['authentication']
 
-BASE_URL = 'http://xk.xidian.edu.cn/xsxkapp/sys/xsxkapp'
+BASE_URL = 'http://xk.xidian.edu.cn/xsxk'
 TYPES = {
-    'public': 'XGXK',  # 校公选课
+    'public': 'XGKC',  # 校公选课
     'program': 'FANKC',  # 方案内课程
     'gym': 'TYKC',  # 体育课程
-    'recommended': 'TJKC'
+    'recommended': 'TJKC',  # 推荐课程
 }
 info = {}
 status = {}
 course_list = set()
 target_course_available = {}
-
-
-def get_info():
-    resp = ses.get(
-        BASE_URL + '/student/' + auth['username'] + '.do',
-        params={'timestamp': int(time.time() * 1000)}
-    ).json()
-    info['campus'] = resp['data']['campus']
-    for batch in resp['data']['electiveBatchList']:
-        if batch['canSelect'] == '1':
-            print('可选轮次:' + batch['name'])
-            info['elective_batch_code'] = batch['code']
-            break
-    if 'elective_batch_code' not in info:
-        raise Exception('暂无可选轮次')
 
 
 def rate_limited(func):
@@ -117,45 +103,40 @@ class Job(KThread):
             return False
         return True
 
-    def select_class(self, type_, class_id):
-        req_data = json.dumps({"data": {
-            "operationType": "1",
-            "studentCode": auth['username'],
-            "electiveBatchCode": info['elective_batch_code'],
-            "teachingClassId": class_id,
-            "isMajor": "1",
-            "campus": info['campus'],
-            "teachingClassType": type_
-        }})
-        select_resp = ses.post(
-            BASE_URL + '/elective/volunteer.do',
-            data={'addParam': req_data}
-        ).json()
-        return select_resp['code'] == '1', select_resp['msg']
+    def select_class(self, type_, class_):
+        select_resp = ses.post(BASE_URL + '/elective/clazz/add', data={
+            'clazzType': type_,
+            'clazzId': class_['JXBID'],
+            'secretVal': class_['secretVal'],
+        }).json()
+        return select_resp['code'] == 200, select_resp['msg']
 
-    def delete_class(self, class_id):
-        req_data = json.dumps({"data": {
-            "operationType": "2",
-            "studentCode": auth['username'],
-            "electiveBatchCode": info['elective_batch_code'],
-            "teachingClassId": class_id,
-            "isMajor": "1"
-        }})
-        delete_resp = ses.post(
-            BASE_URL + '/elective/deleteVolunteer.do',
-            data={'deleteParam': req_data}
-        ).json()
-        return delete_resp['code'] == '1', delete_resp['msg']
+    def delete_class(self, type_, class_):
+        delete_resp = ses.post(BASE_URL + '/elective/clazz/add', data={
+            'clazzType': type_,
+            'clazzId': class_['JXBID'],
+            'secretVal': class_['secretVal'],
+        }).json()
+        return delete_resp['code'] == 200, delete_resp['msg']
 
     def run(self):
         result = False
         while not result and self.ensure_available():
-            class_id = target_course_available[self.course_id][0] \
-                if self.class_id == 'any' else self.class_id
-            self.status = f'正在尝试 {class_id}'
-            result, msg = self.select_class(self.course_type, class_id)
+            pick = None
+            if self.class_id != 'any':
+                for available in target_course_available[self.course_id]:
+                    if available['JXBID'] == self.class_id:
+                        pick = available
+                        break
+                else:
+                    print('没有找到班级号符合的班级，将尝试选择第一个可用班级')
+            if not pick:
+                pick = target_course_available[self.course_id][0]
+            self.status = f'正在尝试 {pick["KCH"]}'
+            result, msg = self.select_class(self.course_type, pick)
             if not result:
-                self.status = f'班级：{class_id} 尝试失败,原因为："{msg}"'
+                self.status = f'班级：{pick["KCH"]} 尝试失败,原因为："{msg}"'
+                time.sleep(0.5)
             else:
                 self.status = '选课成功'
                 break
@@ -168,64 +149,67 @@ class GetClasses(KThread):
     def __init__(self, types):
         super().__init__()
         self.types = types
+        self.status = ''
 
-    @staticmethod
-    def get_classes(_type):
-        query_setting = json.dumps({"data": {
-            "studentCode": auth['username'],
-            "campus": info['campus'],
-            "electiveBatchCode": info['elective_batch_code'],
-            "isMajor": "1",
-            "teachingClassType": TYPES[_type],
-            "checkConflict": "2",
-            "checkCapacity": "2",
-            "queryContent": ""
-        }, "pageSize": "500", "pageNumber": "0", "order": "null"})
-        query_resp = ses.post(
-            f'{BASE_URL}/elective/{_type}Course.do',
-            data={'querySetting': query_setting}
-        ).json()
-        if query_resp['code'] != '1':
-            print(f'获取可选课程失败，原因为: "{query_resp["msg"]}"，正在重试')
-        while query_resp['code'] != '1':
-            print('.', end='', flush=True)
-            query_resp = ses.post(
-                f'{BASE_URL}/elective/{_type}Course.do',
-                data={'querySetting': query_setting}
-            ).json()
-        for course in query_resp['dataList']:
-            if course['courseNumber'] in course_list:
+    def get_classes(self, _type):
+        def list_courses(page=1):
+            try:
+                return ses.post(f'{BASE_URL}/elective/clazz/list', json={
+                    "teachingClassType": _type, "campus": ses.user['campus'],
+                    "pageNumber": page, "pageSize": 500, "orderBy": "",
+                }).json()
+            except RequestException as e:
+                return {'code': 500, 'msg': str(type(e))}
+        query_resp = list_courses()
+        if query_resp['code'] != 200:
+            self.status = f'获取可选课程失败，原因为: "{query_resp["msg"]}"，正在重试'
+        while query_resp['code'] != 200:
+            self.status += '.'
+            query_resp = list_courses()
+        total = query_resp['data']['total']
+        courses = query_resp['data']['rows']
+        for i in range(2, (total + 1) // 500):
+            courses += list_courses(i)['data']['rows']
+        for course in courses:
+            if course['KCH'] in course_list:
                 if 'tcList' in course:
-                    target_course_available[course['courseNumber']] = [
-                        class_['teachingClassID'] for class_ in course['tcList']
-                        if class_['isFull'] == '0' and class_['isConflict'] == '0'
+                    target_course_available[course['KCH']] = [
+                        class_ for class_ in course['tcList']
+                        if class_['SFYM'] == '0' and class_['SFCT'] == '0'
                     ]
+                    if len(target_course_available[course['KCH']]) == 0:
+                        target_course_available.pop(course['KCH'])
                 else:
-                    target_course_available[course['courseNumber']] = [
-                        course['teachingClassID']
-                    ] if course['isFull'] == '0' and course['isConflict'] == '0' \
-                        else []
-                if len(target_course_available[course['courseNumber']]) == 0:
-                    target_course_available.pop(course['courseNumber'])
+                    if course['SFYM'] == '0' and course['SFCT'] == '0':
+                        target_course_available[course['KCH']] = [course]
+        self.status = (
+            f'获取到{total}条课程数据，'
+            f'{len(target_course_available)}门课程中的'
+            f'{sum((len(i) for i in target_course_available))}个班级可选'
+        )
 
     def run(self):
         while True:
             for _type in self.types:
                 self.get_classes(_type)
 
+    def __str__(self):
+        return self.status
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     ses = XKSession(auth['username'], auth['password'])
     ses.request = rate_limited(ses.request)
-    print('token为' + ses.token)
-    get_info()
+    print('当前轮次：' + ses.current_batch['name'])
 
     if input('是否开始抢课?(y/n)') == 'n':
         print('行吧')
         exit(0)
-    get_class_thread = GetClasses(config["open_types"])
-    get_class_thread.start()
     with output(output_type="dict") as progress:
+        progress['[available]'] = GetClasses(
+            {TYPES[i] for i in config["open_types"]}
+        )
+        progress['[available]'].start()
         for k, v in config['courses'].items():
             if k not in TYPES:
                 continue
@@ -248,4 +232,3 @@ if __name__ == '__main__':
             for i in progress.values():
                 if i.is_alive():
                     i.terminate()
-            get_class_thread.terminate()
