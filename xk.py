@@ -12,7 +12,7 @@ with open('config.json', 'r') as f:
     config = json.load(f)
     auth = config['authentication']
 
-BASE_URL = 'http://xk.xidian.edu.cn/xsxk'
+BASE_URL = 'https://xk.xidian.edu.cn/xsxk'
 TYPES = {
     'public': 'XGKC',  # 校公选课
     'program': 'FANKC',  # 方案内课程
