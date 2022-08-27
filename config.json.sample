@@ -17,6 +17,7 @@
   ],
   "authentication": {
     "username": "",
-    "password": ""
+    "password": "",
+    "keyword": "" //填写需要选课的轮次，比如“2019、2020级第三轮选课”，如留空则选择第一个可选的轮次
   }
 }
