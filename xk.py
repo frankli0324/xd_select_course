@@ -198,7 +198,7 @@ class GetClasses(KThread):
 
 
 if __name__ == "__main__":
-    ses = XKSession(auth['username'], auth['password'])
+    ses = XKSession(auth['username'], auth['password'], auth['keyword'])
     ses.request = rate_limited(ses.request)
     print('当前轮次：' + ses.current_batch['name'])
 
